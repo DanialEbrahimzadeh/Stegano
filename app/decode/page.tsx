@@ -39,7 +39,7 @@ export default function DecodePage() {
   const [contentType, setContentType] = useState<"text" | "image" | null>(null);
   const [pseudoCodeLine, setPseudoCodeLine] = useState<number | null>(null);
   const pseudoCodeRef = useRef<HTMLDivElement>(null);
-  const downloadLinkRef = useRef<HTMLAnchorElement>(null);
+
 
   useEffect(() => {
     if (pseudoCodeLine !== null && pseudoCodeRef.current) {
@@ -53,12 +53,10 @@ export default function DecodePage() {
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        setEncodedImage(event.target?.result as string);
-        setMissionComplete(false);
-      };
-      reader.readAsDataURL(file);
+      // Use Blob URL instead of data URL to avoid browser corruption with large images
+      const blobUrl = URL.createObjectURL(file);
+      setEncodedImage(blobUrl);
+      setMissionComplete(false);
     }
   };
 
@@ -104,10 +102,27 @@ export default function DecodePage() {
   };
 
   const downloadDecodedImage = () => {
-    if (decodedImage && downloadLinkRef.current) {
-      downloadLinkRef.current.href = decodedImage;
-      downloadLinkRef.current.download = "restored_secret.png";
-      downloadLinkRef.current.click();
+    if (!decodedImage) return;
+    try {
+      const parts = decodedImage.split(',');
+      const mime = parts[0].match(/:(.*?);/)?.[1] || 'image/png';
+      const byteString = atob(parts[1]);
+      const ab = new ArrayBuffer(byteString.length);
+      const ia = new Uint8Array(ab);
+      for (let i = 0; i < byteString.length; i++) {
+        ia[i] = byteString.charCodeAt(i);
+      }
+      const blob = new Blob([ab], { type: mime });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'restored_secret.png';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      console.error('Download failed:', err);
     }
   };
 
@@ -267,7 +282,7 @@ export default function DecodePage() {
         </div>
       </footer>
 
-      <a ref={downloadLinkRef} className="hidden"></a>
+
     </div>
   );
 }

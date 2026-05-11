@@ -10,11 +10,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { ChevronLeft, Shield, CheckCircle2, Download, Terminal, Settings2, Image as ImageIcon, ArrowLeft, Lock, Sparkles, Code2 } from "lucide-react";
+import { ChevronLeft, Shield, CheckCircle2, Download, Terminal, Settings2, Image as ImageIcon, ArrowLeft, Lock, Sparkles, Code2, Upload, Info, AlertTriangle } from "lucide-react";
 import { 
   ALGORITHMS, 
   getAlgorithmName, 
-  getAlgorithmDescription
+  getAlgorithmDescription,
+  calculateCapacity,
+  resizeImageDataUrl
 } from "../utils/steganography";
 
 const algorithmPseudocode = {
@@ -33,11 +35,18 @@ const algorithmPseudocode = {
 };
 
 const SAMPLE_CARRIERS = [
-  { id: 1, name: "Forest", url: "/carrier1.png" },
-  { id: 2, name: "City", url: "/carrier2.png" },
-  { id: 3, name: "Texture", url: "/carrier3.png" },
-  { id: 4, name: "Abstract", url: "/carrier4.png" },
-  { id: 5, name: "Lab", url: "/carrier5.png" },
+  { id: 1, name: "Forest", url: "/carrier1.jpg" },
+  { id: 2, name: "City", url: "/carrier2.jpg" },
+  { id: 3, name: "Ocean", url: "/carrier3.jpg" },
+  { id: 4, name: "Mountain", url: "/carrier4.jpg" },
+  { id: 5, name: "Tech", url: "/carrier5.jpg" },
+];
+
+const SAMPLE_SECRETS = [
+  { id: 1, name: "Key", url: "/secret1.png" },
+  { id: 2, name: "Lock", url: "/secret2.png" },
+  { id: 3, name: "Message", url: "/secret3.png" },
+  { id: 4, name: "Fingerprint", url: "/secret4.png" },
 ];
 
 export default function EncodePage() {
@@ -50,8 +59,11 @@ export default function EncodePage() {
   const [missionComplete, setMissionComplete] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [pseudoCodeLine, setPseudoCodeLine] = useState<number | null>(null);
+  const [selectedCarrierId, setSelectedCarrierId] = useState<number | null>(null);
+  const [selectedSecretId, setSelectedSecretId] = useState<number | null>(null);
+  const [coverDimensions, setCoverDimensions] = useState<{ w: number; h: number } | null>(null);
   const pseudoCodeRef = useRef<HTMLDivElement>(null);
-  const downloadLinkRef = useRef<HTMLAnchorElement>(null);
+  const secretFileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (pseudoCodeLine !== null && pseudoCodeRef.current) {
@@ -62,16 +74,28 @@ export default function EncodePage() {
     }
   }, [pseudoCodeLine]);
 
+  // Measure cover image dimensions whenever coverImage changes
+  useEffect(() => {
+    if (!coverImage) {
+      setCoverDimensions(null);
+      return;
+    }
+    const img = window.document.createElement('img');
+    img.src = coverImage;
+    img.onload = () => {
+      setCoverDimensions({ w: img.width, h: img.height });
+    };
+  }, [coverImage]);
+
   const handleCoverUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        setCoverImage(event.target?.result as string);
-        setMissionComplete(false);
-        setResultImage(null);
-      };
-      reader.readAsDataURL(file);
+      // Use Blob URL to avoid data URL corruption with large images
+      const blobUrl = URL.createObjectURL(file);
+      setCoverImage(blobUrl);
+      setSelectedCarrierId(null);
+      setMissionComplete(false);
+      setResultImage(null);
     }
   };
 
@@ -81,25 +105,41 @@ export default function EncodePage() {
       const reader = new FileReader();
       reader.onload = (event) => {
         setSecretImage(event.target?.result as string);
+        setSelectedSecretId(null);
       };
       reader.readAsDataURL(file);
     }
   };
 
-  const selectSampleCarrier = async (url: string) => {
+  const selectSampleCarrier = async (id: number, url: string) => {
+    try {
+      const response = await fetch(url);
+      const blob = await response.blob();
+      // Use Blob URL to avoid data URL corruption with large images
+      const blobUrl = URL.createObjectURL(blob);
+      setCoverImage(blobUrl);
+      setSelectedCarrierId(id);
+      setMissionComplete(false);
+      setResultImage(null);
+      toast.success("Sample carrier loaded");
+    } catch (error) {
+      toast.error("Failed to load sample image");
+    }
+  };
+
+  const selectSampleSecret = async (id: number, url: string) => {
     try {
       const response = await fetch(url);
       const blob = await response.blob();
       const reader = new FileReader();
       reader.onload = (event) => {
-        setCoverImage(event.target?.result as string);
-        setMissionComplete(false);
-        setResultImage(null);
-        toast.success("Sample carrier loaded");
+        setSecretImage(event.target?.result as string);
+        setSelectedSecretId(id);
+        toast.success("Secret image selected");
       };
       reader.readAsDataURL(blob);
     } catch (error) {
-      toast.error("Failed to load sample image");
+      toast.error("Failed to load secret image");
     }
   };
 
@@ -125,7 +165,22 @@ export default function EncodePage() {
         await new Promise(r => setTimeout(r, 600));
       }
       
-      const secretData = isText ? secretText : (secretImage || "");
+      let secretData: string;
+      if (isText) {
+        secretData = secretText;
+        if (!secretData.trim()) {
+          throw new Error("Please enter a text message to hide.");
+        }
+      } else {
+        if (!secretImage) {
+          throw new Error("Please select or upload a secret image.");
+        }
+        // Resize secret image to ensure it fits within carrier capacity
+        // We downscale to max 300×300 to keep the data URL manageable
+        setProcessingStatus("Optimizing secret image...");
+        secretData = await resizeImageDataUrl(secretImage, 300, 300);
+      }
+
       const { resultImage: encodedImage } = await ALGORITHMS[0].encode(coverImage, secretData, isText);
       
       setResultImage(encodedImage);
@@ -135,20 +190,37 @@ export default function EncodePage() {
       toast.success("Encoding complete!");
     } catch (error) {
       console.error(error);
+      const msg = error instanceof Error ? error.message : "Encoding failed.";
       setProcessingStatus("Failed.");
-      toast.error("Encoding failed.");
+      toast.error(msg);
     } finally {
       setIsProcessing(false);
     }
   };
 
-  const downloadEncodedImage = () => {
-    if (resultImage && downloadLinkRef.current) {
-      downloadLinkRef.current.href = resultImage;
-      downloadLinkRef.current.download = "stego_image.png";
-      downloadLinkRef.current.click();
+  const downloadEncodedImage = async () => {
+    if (!resultImage) return;
+    try {
+      // resultImage is a Blob URL — fetch it to get the blob
+      const response = await fetch(resultImage);
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'stego_image.png';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      console.error('Download failed:', err);
+      toast.error('Download failed. Please try again.');
     }
   };
+
+  const capacityKB = coverDimensions
+    ? Math.floor(calculateCapacity(coverDimensions.w, coverDimensions.h) / 1024)
+    : null;
 
   return (
     <div className="min-h-screen flex flex-col selection:bg-indigo-100 selection:text-indigo-900 bg-[#f8fafc]">
@@ -172,7 +244,7 @@ export default function EncodePage() {
             <Card className="bg-white border border-slate-200 overflow-hidden rounded-3xl shadow-sm">
               <CardHeader className="bg-slate-50 border-b border-slate-200 p-8">
                 <CardTitle className="text-2xl font-outfit text-slate-900">Carrier Source</CardTitle>
-                <CardDescription>Select or upload an image to hide your data within.</CardDescription>
+                <CardDescription>Select or upload a large image to hide your data within.</CardDescription>
               </CardHeader>
               <CardContent className="p-8 space-y-8">
                 {/* Sample Carriers Selection */}
@@ -182,13 +254,15 @@ export default function EncodePage() {
                     {SAMPLE_CARRIERS.map((sample) => (
                       <button
                         key={sample.id}
-                        onClick={() => selectSampleCarrier(sample.url)}
-                        className={`relative aspect-square rounded-xl overflow-hidden border-2 transition-all hover:scale-105 active:scale-95 ${
-                          coverImage?.includes(sample.url) ? "border-indigo-600 ring-2 ring-indigo-100" : "border-slate-100"
+                        onClick={() => selectSampleCarrier(sample.id, sample.url)}
+                        className={`relative aspect-square rounded-xl overflow-hidden border-2 transition-all hover:scale-105 active:scale-95 group ${
+                          selectedCarrierId === sample.id ? "border-indigo-600 ring-2 ring-indigo-100" : "border-slate-100 hover:border-slate-300"
                         }`}
                         title={sample.name}
                       >
                         <img src={sample.url} alt={sample.name} className="w-full h-full object-cover" />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                        <span className="absolute bottom-1 left-1 right-1 text-[10px] font-bold text-white opacity-0 group-hover:opacity-100 transition-opacity text-center">{sample.name}</span>
                       </button>
                     ))}
                   </div>
@@ -207,8 +281,16 @@ export default function EncodePage() {
                       accept="image/*"
                     />
                     {coverImage ? (
-                      <div className="w-full aspect-video relative rounded-lg overflow-hidden border border-slate-200">
-                        <img src={coverImage} alt="Cover" className="w-full h-full object-contain" />
+                      <div className="w-full space-y-3">
+                        <div className="w-full aspect-video relative rounded-lg overflow-hidden border border-slate-200">
+                          <img src={coverImage} alt="Cover" className="w-full h-full object-contain" />
+                        </div>
+                        {coverDimensions && (
+                          <div className="flex items-center gap-2 text-xs text-slate-500 justify-center">
+                            <Info className="w-3 h-3" />
+                            <span>{coverDimensions.w}×{coverDimensions.h} px • Capacity: ~{capacityKB} KB</span>
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <div className="text-center space-y-4">
@@ -216,6 +298,7 @@ export default function EncodePage() {
                            <ImageIcon className="w-8 h-8 text-slate-300" />
                         </div>
                         <p className="text-slate-900 font-bold">Click or drop to upload custom carrier</p>
+                        <p className="text-xs text-slate-400">Use a large image (2000+ pixels) for more capacity</p>
                       </div>
                     )}
                   </div>
@@ -235,26 +318,98 @@ export default function EncodePage() {
                         onChange={(e) => setSecretText(e.target.value)}
                         className="min-h-[150px] bg-slate-50 border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20"
                       />
+                      {secretText && coverDimensions && (
+                        <div className="mt-2 flex items-center gap-2 text-xs">
+                          {secretText.length <= calculateCapacity(coverDimensions.w, coverDimensions.h) ? (
+                            <>
+                              <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+                              <span className="text-emerald-600">Message fits: {secretText.length} chars / {calculateCapacity(coverDimensions.w, coverDimensions.h).toLocaleString()} max</span>
+                            </>
+                          ) : (
+                            <>
+                              <AlertTriangle className="w-3 h-3 text-red-500" />
+                              <span className="text-red-600">Message too large: {secretText.length} chars / {calculateCapacity(coverDimensions.w, coverDimensions.h).toLocaleString()} max</span>
+                            </>
+                          )}
+                        </div>
+                      )}
                     </TabsContent>
-                    <TabsContent value="image" className="mt-4">
+                    <TabsContent value="image" className="mt-4 space-y-4">
+                      {/* Default secret images gallery */}
+                      <div className="space-y-3">
+                        <Label className="text-slate-500 uppercase tracking-widest text-[10px] font-bold">Quick Start Secrets</Label>
+                        <div className="grid grid-cols-4 gap-3">
+                          {SAMPLE_SECRETS.map((sample) => (
+                            <button
+                              key={sample.id}
+                              onClick={() => selectSampleSecret(sample.id, sample.url)}
+                              className={`relative aspect-square rounded-xl overflow-hidden border-2 transition-all hover:scale-105 active:scale-95 group bg-slate-50 ${
+                                selectedSecretId === sample.id ? "border-indigo-600 ring-2 ring-indigo-100" : "border-slate-100 hover:border-slate-300"
+                              }`}
+                              title={sample.name}
+                            >
+                              <img src={sample.url} alt={sample.name} className="w-full h-full object-contain p-2" />
+                              <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity rounded-xl" />
+                              <span className="absolute bottom-1 left-1 right-1 text-[10px] font-bold text-white opacity-0 group-hover:opacity-100 transition-opacity text-center">{sample.name}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Divider */}
+                      <div className="flex items-center gap-4">
+                        <div className="flex-1 h-px bg-slate-200" />
+                        <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">or upload your own</span>
+                        <div className="flex-1 h-px bg-slate-200" />
+                      </div>
+
+                      {/* Custom upload */}
                       <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-200 rounded-2xl p-8 hover:border-indigo-400 hover:bg-indigo-50 transition-all cursor-pointer relative">
                         <input 
+                          ref={secretFileInputRef}
                           type="file" 
                           className="absolute inset-0 opacity-0 cursor-pointer" 
                           onChange={handleSecretImageUpload}
                           accept="image/*"
                         />
-                        {secretImage ? (
-                          <div className="w-full h-32 relative rounded-lg overflow-hidden border border-slate-200">
-                            <img src={secretImage} alt="Secret" className="w-full h-full object-contain" />
+                        {secretImage && !selectedSecretId ? (
+                          <div className="w-full space-y-3">
+                            <div className="w-full h-32 relative rounded-lg overflow-hidden border border-slate-200">
+                              <img src={secretImage} alt="Secret" className="w-full h-full object-contain" />
+                            </div>
+                            <p className="text-xs text-slate-500 text-center flex items-center gap-1 justify-center">
+                              <Info className="w-3 h-3" />
+                              Image will be auto-resized to fit carrier capacity
+                            </p>
                           </div>
                         ) : (
-                          <div className="flex flex-col items-center">
-                            <ImageIcon className="w-6 h-6 text-slate-400 mb-2" />
-                            <span className="text-sm text-slate-600 font-medium">Upload secret image</span>
+                          <div className="flex flex-col items-center gap-3">
+                            <div className="p-3 rounded-full bg-slate-50 border border-slate-100">
+                              <Upload className="w-5 h-5 text-slate-400" />
+                            </div>
+                            <div className="text-center">
+                              <span className="text-sm text-slate-700 font-bold block">Upload custom secret image</span>
+                              <span className="text-xs text-slate-400">Any size — auto-resized for encoding</span>
+                            </div>
                           </div>
                         )}
                       </div>
+
+                      {/* Selected preview */}
+                      {secretImage && selectedSecretId && (
+                        <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4 flex items-center gap-4 animate-in fade-in slide-in-from-bottom-2">
+                          <div className="w-16 h-16 rounded-lg overflow-hidden border border-indigo-200 bg-white flex-shrink-0">
+                            <img src={secretImage} alt="Selected" className="w-full h-full object-contain p-1" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-bold text-indigo-900">
+                              {SAMPLE_SECRETS.find(s => s.id === selectedSecretId)?.name} selected
+                            </p>
+                            <p className="text-xs text-indigo-600">Ready to embed into carrier</p>
+                          </div>
+                          <CheckCircle2 className="w-5 h-5 text-indigo-600 flex-shrink-0" />
+                        </div>
+                      )}
                     </TabsContent>
                   </Tabs>
                 </div>
@@ -371,7 +526,7 @@ export default function EncodePage() {
         </div>
       </footer>
 
-      <a ref={downloadLinkRef} className="hidden"></a>
+
     </div>
   );
 }
